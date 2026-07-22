@@ -1,0 +1,23 @@
+{% extends "allianceauth/base-bs5.html" %}
+{% load i18n %}
+
+{% block page_title %}{% trans "Wanderer" %}{% endblock %}
+{% block header_nav_brand %}{% trans "Wanderer" %}{% endblock %}
+
+{% block content %}
+<div class="col-lg-12">
+    <h1 class="page-header text-center">
+        {% trans "Wanderer Integration" %}
+        <small class="text-muted">v{{ version }}</small>
+    </h1>
+
+    <div class="card">
+        <div class="card-body">
+            <p class="mb-0">
+                {% blocktrans %}This is the placeholder page for the Alliance Auth ↔ Wanderer
+                integration. Integration features will appear here.{% endblocktrans %}
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,10 @@
+# Secrets / local config (contain generated keys, DB passwords, EVE SSO creds)
+.env
+wanderer-conf.env
+
+# Python build/editable-install artifacts from plugin development
+*.egg-info/
+__pycache__/
+*.py[cod]
+build/
+dist/

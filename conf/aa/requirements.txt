@@ -1,0 +1,7 @@
+# Extra published packages to install into the Alliance Auth image.
+# The local ./plugins/wanderer plugin is installed separately (editable) by the
+# Dockerfile, so it does NOT belong here. Add third-party AA apps or plugin
+# dependencies below, one per line, pinned where possible. Rebuild with:
+#   docker compose build allianceauth_gunicorn
+#
+# example-aa-plugin==1.2.3

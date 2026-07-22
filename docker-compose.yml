@@ -1,0 +1,205 @@
+# Test bed running two stacks side by side:
+#   - wanderer         : the EVE mapping app (web UI on :8000)   -> existing
+#   - alliance auth    : plugin development target (web UI on :8001) -> added
+#
+# The AA app services build a thin image on top of the published Alliance Auth
+# image so the local plugin under ./plugins can be pip-installed editable. The
+# plugin source is bind-mounted, so code edits take effect on a container restart
+# (no rebuild needed unless you change dependencies).
+
+# Shared config for every Alliance Auth Django/Celery process.
+x-allianceauth-base: &allianceauth-base
+  build:
+    context: .
+    dockerfile: ./conf/aa/Dockerfile
+    args:
+      AA_DOCKER_TAG: ${AA_DOCKER_TAG:?set AA_DOCKER_TAG in .env}
+  image: wanderer-aa/allianceauth:local
+  restart: unless-stopped
+  # The image WORKDIR is the user home; run from the Django project root so
+  # `myauth.wsgi` / `myauth.celery` resolve to the package, not the project dir.
+  working_dir: /home/allianceauth/myauth
+  env_file:
+    - .env
+  volumes:
+    - ./conf/aa/local.py:/home/allianceauth/myauth/myauth/settings/local.py:ro
+    - ./conf/aa/celery.py:/home/allianceauth/myauth/myauth/celery.py:ro
+    - aa-static:/var/www/myauth/static
+    # Live-editable plugin source (installed editable in the image).
+    - ./plugins/wanderer:/aa-plugins/wanderer
+  depends_on:
+    aa_mysql:
+      condition: service_healthy
+    aa_redis:
+      condition: service_healthy
+  networks:
+    - aa-internal
+    - wanderer-egress
+
+services:
+  # ------------------------------------------------------------------ Wanderer
+  # Route calculation service used by the map's "custom routes" feature.
+  eve-route-builder:
+    image: wandererltd/eve-route-builder:main
+    restart: unless-stopped
+    environment:
+      - PORT=2001
+    networks:
+      - wanderer-internal
+
+  # Killmail feed. Talks to ESI/zKillboard, so it needs egress.
+  wanderer-kills:
+    image: wandererltd/wanderer-kills:latest
+    restart: unless-stopped
+    environment:
+      - PORT=4004
+      - MIX_ENV=prod
+      - ESI_BASE_URL=https://esi.evetech.net/latest
+      - ESI_DATASOURCE=tranquility
+      - CACHE_KILLMAIL_TTL=300
+      - CACHE_SYSTEM_TTL=3600
+      - CACHE_ESI_TTL=86400
+    networks:
+      - wanderer-internal
+      - wanderer-egress
+
+  wanderer_db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks:
+      - wanderer-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  wanderer:
+    image: wandererltd/community-edition:${WANDERER_VERSION:-latest}
+    restart: unless-stopped
+    # Creates the database and runs migrations on every boot; both are idempotent.
+    command: sh -c "/app/entrypoint.sh db createdb && /app/entrypoint.sh db migrate && /app/entrypoint.sh run"
+    depends_on:
+      wanderer_db:
+        condition: service_healthy
+      eve-route-builder:
+        condition: service_started
+      wanderer-kills:
+        condition: service_started
+    ports:
+      - "${WANDERER_BIND:-8000}:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@wanderer_db:5432/postgres
+      - CUSTOM_ROUTE_BASE_URL=http://eve-route-builder:2001
+      - WANDERER_KILLS_SERVICE_ENABLED=true
+      - WANDERER_KILLS_BASE_URL=ws://wanderer-kills:4004
+      - PHX_SERVER=true
+      - ECTO_IPV6=false
+      - ERL_AFLAGS=-proto_dist inet6_tcp
+      - ERL_MAX_PORTS=1024
+    env_file:
+      - wanderer-conf.env
+    healthcheck:
+      disable: true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    networks:
+      - wanderer-internal
+      - wanderer-egress
+
+  # -------------------------------------------------------------- Alliance Auth
+  aa_mysql:
+    image: mariadb:11.8
+    restart: unless-stopped
+    command: [mariadbd, --character-set-server=utf8mb4, --collation-server=utf8mb4_unicode_ci]
+    environment:
+      - MARIADB_DATABASE=${AA_DB_NAME}
+      - MARIADB_USER=${AA_DB_USER}
+      - MARIADB_PASSWORD=${AA_DB_PASSWORD:?set AA_DB_PASSWORD in .env}
+      - MARIADB_ROOT_PASSWORD=${AA_DB_ROOT_PASSWORD:?set AA_DB_ROOT_PASSWORD in .env}
+    volumes:
+      - aa-db-data:/var/lib/mysql
+    networks:
+      - aa-internal
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  aa_redis:
+    image: redis:8
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - aa-redis-data:/data
+    networks:
+      - aa-internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  allianceauth_gunicorn:
+    <<: *allianceauth-base
+    entrypoint: gunicorn myauth.wsgi --bind=0.0.0.0:8000 --workers=3 --timeout=120 --max-requests=500 --max-requests-jitter=50
+
+  allianceauth_worker:
+    <<: *allianceauth-base
+    entrypoint: celery -A myauth worker --pool=threads --concurrency=5 -n worker_%n
+
+  # Single-threaded worker for the "services" queue (e.g. Discord) that some
+  # AA modules route to. Harmless when idle; keeps parity with upstream.
+  allianceauth_worker_services:
+    <<: *allianceauth-base
+    entrypoint: celery -A myauth worker --pool=threads --concurrency=1 -Q services -n worker_services_%n
+
+  allianceauth_beat:
+    <<: *allianceauth-base
+    entrypoint: celery -A myauth beat
+
+  # Serves collected static files and reverse-proxies the app. This is the
+  # only AA service published to the host.
+  aa_nginx:
+    image: nginx:stable
+    restart: unless-stopped
+    volumes:
+      - ./conf/aa/nginx.conf:/etc/nginx/nginx.conf:ro
+      - aa-static:/var/www/myauth/static:ro
+    ports:
+      - "${AA_BIND:-8001}:80"
+    depends_on:
+      - allianceauth_gunicorn
+    # Must be on a non-internal network to publish a host port; reaches
+    # allianceauth_gunicorn (also on wanderer-egress) by service name.
+    networks:
+      - wanderer-egress
+
+volumes:
+  db-data:
+    driver: local
+  aa-db-data:
+    driver: local
+  aa-redis-data:
+    driver: local
+  aa-static:
+    driver: local
+
+networks:
+  # No route off-host: keeps Postgres unreachable from the internet.
+  wanderer-internal:
+    internal: true
+  # Egress for the services that call ESI / zKillboard / EVE SSO. Also the
+  # shared bridge where the AA plugin can reach the wanderer service by name.
+  wanderer-egress:
+  # AA database/redis/app traffic. Internal, plus the app services also join
+  # wanderer-egress above for ESI access and reaching Wanderer's API.
+  aa-internal:
+    internal: true
