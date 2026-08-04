@@ -4,8 +4,9 @@ An **Alliance Auth test bed** for developing Alliance Auth plugins, running
 alongside a live [Wanderer](https://github.com/wanderer-industries/wanderer)
 instance so integration plugins can be built and exercised end to end.
 
-The first plugin under development is [`aa-wanderer`](plugins/wanderer) — an
-Alliance Auth ↔ Wanderer integration.
+The first plugin under development is
+[`aa-wanderer-leaderboard`](plugins/wanderer-leaderboard) — an Alliance Auth
+leaderboard for Wanderer.
 
 Everything runs from a single Docker Compose project.
 
@@ -14,7 +15,7 @@ Everything runs from a single Docker Compose project.
 | Stack | Services | Host URL |
 | --- | --- | --- |
 | **Wanderer** | `wanderer`, `wanderer_db` (Postgres), `eve-route-builder`, `wanderer-kills` | http://localhost:8000 |
-| **Alliance Auth** | `allianceauth_gunicorn`, `allianceauth_worker`, `allianceauth_worker_services`, `allianceauth_beat`, `aa_nginx`, `aa_mysql` (MariaDB), `aa_redis` (Redis) | http://localhost:8001 |
+| **Alliance Auth** | `allianceauth_init` (one-shot: migrate + collectstatic), `allianceauth_gunicorn`, `allianceauth_worker`, `allianceauth_worker_services`, `allianceauth_beat`, `aa_nginx`, `aa_mysql` (MariaDB), `aa_redis` (Redis) | http://localhost:8001 |
 
 The two stacks are independent (separate databases and networks); they share the
 `wanderer-egress` bridge so the AA plugin can reach the Wanderer service by name
@@ -67,13 +68,18 @@ docker compose up -d --build
 ```
 
 The AA app image is built on top of the published AA image and installs the
-local `plugins/wanderer` package in editable mode.
+local `plugins/wanderer-leaderboard` package in editable mode.
 
-### 4. Initialize the Alliance Auth database (first run only)
+Migrations and static files are handled automatically: the one-shot
+`allianceauth_init` service waits for `aa_mysql` to report healthy, applies AA
+core + plugin migrations, runs `collectstatic` into the `aa-static` volume that
+`aa_nginx` serves, and exits — the app services only start once it succeeds.
+Both steps are idempotent, so it runs on every `up` and is a no-op when the
+schema and static files are current.
+
+### 4. Create an admin user (first run only)
 
 ```bash
-docker compose exec allianceauth_gunicorn python manage.py migrate
-docker compose exec allianceauth_gunicorn python manage.py collectstatic --noinput
 docker compose exec -it allianceauth_gunicorn python manage.py createsuperuser
 ```
 
@@ -81,28 +87,51 @@ User portals:
 * Alliance Auth - http://localhost:8001
 * Wanderer - http://localhost:8000
 
-
 Admin portals:
 * http://localhost:8001/admin/
 * http://localhost:8000/admin/
 
 > Grant your user the plugin's permission at
 > **Admin → Authentication and Authorization → Users** (or via a group):
-> `wanderer | general | Can access the Wanderer integration`. The **Wanderer**
-> menu item appears once granted.
+> `wanderer_leaderboard | general | Can access the Wanderer Leaderboard`. The
+> **Wanderer Leaderboard** menu item appears once granted.
+
+### 5. Wanderer Leaderboard: map API key
+
+The leaderboard reads Wanderer's audit API (`GET /api/map/audit`), authenticated
+per map with that map's own API key — no database access, no Postgres role.
+
+1. In Wanderer (http://localhost:8000), open the map's settings and copy its
+   **API key**.
+2. In AA admin → **Wanderer Leaderboard → Tracked maps**, add a map with its
+   slug (or map id) and paste the key into **API key**. Leave **base URL** blank
+   to use the compose default (`http://wanderer:8000`).
+3. Select the map in the list and run the **Test the API key against Wanderer**
+   admin action to confirm it works before relying on it.
+
+Then open **http://localhost:8001/wanderer-leaderboard/**.
+
+> The audit API only serves *relative* windows (max `3M`), so the leaderboard
+> pulls three months and slices the selected month out locally. Months older
+> than that can't be retrieved and render an explanatory notice. Responses are
+> cached for `WANDERER_LEADERBOARD_CACHE_TTL` seconds (default 300).
 
 ## Plugin development workflow
 
-The plugin lives in [`plugins/wanderer/`](plugins/wanderer) and is bind-mounted
-into the AA containers, so the loop is fast:
+The plugin lives in [`plugins/wanderer-leaderboard/`](plugins/wanderer-leaderboard)
+and is bind-mounted into the AA containers, so the loop is fast:
 
 - **Edit Python / templates** → restart the app to pick up changes:
   ```bash
   docker compose restart allianceauth_gunicorn allianceauth_worker allianceauth_worker_services allianceauth_beat
   ```
-- **Add/rename models** → make and apply migrations:
+- **Add/rename models** → make and apply migrations. The container runs as a
+  different uid than your host user, so `makemigrations` **cannot write** the
+  file into the bind-mounted source (it fails with `PermissionError`). Generate
+  it, then fix ownership — or hand-write the migration:
   ```bash
-  docker compose exec allianceauth_gunicorn python manage.py makemigrations wanderer
+  docker compose exec allianceauth_gunicorn python manage.py makemigrations wanderer_leaderboard
+  sudo chown -R "$(id -u):$(id -g)" plugins/wanderer-leaderboard   # if it did write as root/other
   docker compose exec allianceauth_gunicorn python manage.py migrate
   ```
 - **Add a third-party dependency** → add it to
@@ -112,6 +141,14 @@ into the AA containers, so the loop is fast:
   ```
 - **Register a new plugin app** in INSTALLED_APPS via
   [`conf/aa/local.py`](conf/aa/local.py).
+- **Edit `conf/aa/local.py`** (settings, Celery schedule, INSTALLED_APPS) →
+  `restart` fails on this Docker Desktop/WSL setup because editing a mounted file
+  invalidates the container's cached mount. Use `up -d` to **recreate** instead:
+  ```bash
+  docker compose up -d allianceauth_gunicorn allianceauth_worker allianceauth_worker_services allianceauth_beat
+  ```
+  (`aa_nginx` re-resolves the gunicorn upstream via Docker DNS, so recreating the
+  app no longer requires restarting nginx.)
 
 ## Layout
 
@@ -125,7 +162,7 @@ conf/aa/
   celery.py               AA celery app
   nginx.conf              static files + reverse proxy for AA
   requirements.txt        extra pip packages for the AA image
-plugins/wanderer/         the aa-wanderer plugin (editable install)
+plugins/wanderer-leaderboard/   the aa-wanderer-leaderboard plugin (editable install)
 ```
 
 ## Useful commands

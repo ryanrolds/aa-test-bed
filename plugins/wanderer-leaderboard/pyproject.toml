@@ -1,0 +1,51 @@
+[build-system]
+build-backend = "hatchling.build"
+requires = [
+    "hatchling",
+]
+
+[project]
+name = "aa-wanderer-leaderboard"
+description = "Monthly mapping contribution leaderboard for Wanderer"
+readme = "README.md"
+keywords = [
+    "allianceauth",
+    "leaderboard",
+    "wanderer",
+]
+license = { file = "LICENSE.md" }
+authors = [
+    { name = "Ryan R. Olds", email = "ryanrolds@gmail.com" },
+]
+requires-python = ">=3.10"
+classifiers = [
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Framework :: Django :: 4.2",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
+]
+dynamic = [
+    "version",
+]
+dependencies = [
+    "allianceauth>=4.0.0,<6",
+    "requests>=2.28",
+]
+
+[tool.hatch.version]
+path = "wanderer_leaderboard/__init__.py"
+
+[tool.hatch.build]
+include = [
+    "/wanderer_leaderboard",
+]

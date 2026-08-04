@@ -52,5 +52,13 @@ CACHES = {
 
 # Test-bed plugins developed in this repo (installed editable in the image).
 INSTALLED_APPS += [  # noqa: F405
-    "wanderer",
+    "wanderer_leaderboard",
 ]
+
+# The leaderboard reads Wanderer's audit API over HTTP, authenticated per map
+# with an API key stored on the TrackedMap record (AA admin). This is only the
+# fallback base URL for maps that don't set their own; inside compose the
+# Wanderer service is reachable by name over the shared wanderer-egress bridge.
+WANDERER_LEADERBOARD_BASE_URL = os.environ.get(
+    "WANDERER_BASE_URL", "http://wanderer:8000"
+)

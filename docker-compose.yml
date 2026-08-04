@@ -26,14 +26,20 @@ x-allianceauth-base: &allianceauth-base
     - ./conf/aa/celery.py:/home/allianceauth/myauth/myauth/celery.py:ro
     - aa-static:/var/www/myauth/static
     # Live-editable plugin source (installed editable in the image).
-    - ./plugins/wanderer:/aa-plugins/wanderer
+    - ./plugins/wanderer-leaderboard:/aa-plugins/wanderer-leaderboard
   depends_on:
     aa_mysql:
       condition: service_healthy
     aa_redis:
       condition: service_healthy
+    # One-shot migrate + collectstatic; the app services only start once it
+    # exits 0. (allianceauth_init overrides this whole block, so it can't
+    # depend on itself.)
+    allianceauth_init:
+      condition: service_completed_successfully
   networks:
     - aa-internal
+    # Also how the leaderboard reaches Wanderer's HTTP API (http://wanderer:8000).
     - wanderer-egress
 
 services:
@@ -79,7 +85,9 @@ services:
       retries: 10
 
   wanderer:
-    image: wandererltd/community-edition:${WANDERER_VERSION:-latest}
+    # Defaults to the published image; set WANDERER_IMAGE in .env to a locally
+    # built tag (e.g. wanderer:local) to test source changes.
+    image: ${WANDERER_IMAGE:-wandererltd/community-edition:${WANDERER_VERSION:-latest}}
     restart: unless-stopped
     # Creates the database and runs migrations on every boot; both are idempotent.
     command: sh -c "/app/entrypoint.sh db createdb && /app/entrypoint.sh db migrate && /app/entrypoint.sh run"
@@ -147,6 +155,21 @@ services:
       timeout: 5s
       retries: 10
 
+  # One-shot: applies Django migrations (AA core + the local plugin, including
+  # the plugin's own tables), collects static files into the aa-static volume
+  # that aa_nginx serves, then exits. Every other AA service waits for it to
+  # finish successfully, so a fresh `docker compose up` needs no manual step.
+  # Both steps are idempotent — a no-op once the schema and static are current.
+  allianceauth_init:
+    <<: *allianceauth-base
+    restart: "no"
+    entrypoint: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput"
+    # Replaces the base depends_on entirely: the schema lives in aa_mysql, and
+    # neither Redis nor Wanderer is needed to migrate or collect static.
+    depends_on:
+      aa_mysql:
+        condition: service_healthy
+
   allianceauth_gunicorn:
     <<: *allianceauth-base
     entrypoint: gunicorn myauth.wsgi --bind=0.0.0.0:8000 --workers=3 --timeout=120 --max-requests=500 --max-requests-jitter=50
@@ -193,7 +216,8 @@ volumes:
     driver: local
 
 networks:
-  # No route off-host: keeps Postgres unreachable from the internet.
+  # No route off-host: keeps Postgres unreachable from the internet. Only the
+  # Wanderer stack is on it — AA reaches Wanderer over HTTP, not its database.
   wanderer-internal:
     internal: true
   # Egress for the services that call ESI / zKillboard / EVE SSO. Also the

@@ -1,3 +1,4 @@
+# Django
 from django.db import migrations, models
 
 
@@ -25,7 +26,7 @@ class Migration(migrations.Migration):
                 "managed": False,
                 "default_permissions": (),
                 "permissions": (
-                    ("basic_access", "Can access the Wanderer integration"),
+                    ("basic_access", "Can access the Wanderer Leaderboard"),
                 ),
             },
         ),

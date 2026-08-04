@@ -5,3 +5,6 @@
 #   docker compose build allianceauth_gunicorn
 #
 # example-aa-plugin==1.2.3
+
+# aa-wanderer-leaderboard talks to Wanderer over HTTP now; `requests` already
+# ships with Alliance Auth, so nothing extra is needed here.
