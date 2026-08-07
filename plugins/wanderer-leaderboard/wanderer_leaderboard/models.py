@@ -18,6 +18,7 @@ class General(models.Model):
 
 
 class TrackedMap(models.Model):
+    """A Wanderer map the leaderboard can read activity from."""
 
     objects = TrackedMapManager()
 
@@ -42,15 +43,12 @@ class TrackedMap(models.Model):
     )
     base_url = models.CharField(
         max_length=255,
-        blank=True,
-        default="",
         help_text=(
-            "Base URL used to fetch this map's audit data from Wanderer's API. "
-            "Alliance Auth calls it from the server, not your browser, so it must "
-            "be reachable from this server — in the Docker setup that is the "
-            "wanderer service name (http://wanderer:8000), not http://localhost:8000, "
-            "which is Alliance Auth itself. Leave blank to use "
-            "WANDERER_LEADERBOARD_BASE_URL."
+            "Base URL of the Wanderer instance hosting this map, e.g. "
+            "https://wanderer.example.com. Alliance Auth calls it from the "
+            "server, not from your browser, so it has to be reachable from "
+            "this server — behind Docker that is usually the Wanderer service "
+            "name, not the localhost address you use in the browser."
         ),
     )
     api_token = models.CharField(
@@ -64,6 +62,13 @@ class TrackedMap(models.Model):
         ),
     )
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        """Meta definitions"""
+
+        ordering = ["name"]
+        verbose_name = "tracked map"
+        verbose_name_plural = "tracked maps"
 
     def __str__(self):
         return self.name

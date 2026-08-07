@@ -25,26 +25,25 @@
                     <input type="hidden" name="month" value="{{ month }}">
                     <label class="form-label mb-0">{% translate "Map" %}</label>
                     <select name="map" class="form-select form-select-sm" onchange="this.form.submit()">
-                        <option value="all" {% if selected_key == "all" %}selected{% endif %}>{% translate "All maps" %}</option>
                         {% for m in maps %}
-                            <option value="{{ m.pk }}" {% if selected_key == m.pk|stringformat:"s" %}selected{% endif %}>{{ m.name }}</option>
+                            <option value="{{ m.pk }}" {% if m.pk == selected_map.pk %}selected{% endif %}>{{ m.name }}</option>
                         {% endfor %}
                     </select>
                 </form>
 
                 <div class="btn-group" role="group">
                     <a class="btn btn-outline-secondary btn-sm"
-                       href="?map={{ selected_key }}&year={{ prev_year }}&month={{ prev_month }}">&laquo; {% translate "Prev" %}</a>
+                       href="?map={{ selected_map.pk }}&year={{ prev_year }}&month={{ prev_month }}">&laquo; {% translate "Prev" %}</a>
                     <span class="btn btn-sm disabled fw-bold">{{ period_label }}</span>
                     <a class="btn btn-outline-secondary btn-sm"
-                       href="?map={{ selected_key }}&year={{ next_year }}&month={{ next_month }}">{% translate "Next" %} &raquo;</a>
+                       href="?map={{ selected_map.pk }}&year={{ next_year }}&month={{ next_month }}">{% translate "Next" %} &raquo;</a>
                 </div>
             </div>
         </div>
 
-        {% for error in errors %}
+        {% if error %}
             <div class="alert alert-danger">{{ error }}</div>
-        {% endfor %}
+        {% endif %}
 
         {% if beyond_horizon %}
         <div class="alert alert-warning">
@@ -58,14 +57,14 @@
                     <tr>
                         <th rowspan="2" class="align-middle text-end">#</th>
                         <th rowspan="2" class="align-middle text-start">{% translate "Contributor" %}</th>
-                        {% for cat in categories %}<th colspan="3" class="text-capitalize border-start">{{ cat }}</th>{% endfor %}
+                        {% for cat in categories %}<th colspan="{{ action_labels|length }}" class="text-capitalize border-start">{{ cat }}</th>{% endfor %}
                         <th rowspan="2" class="align-middle text-end border-start">{% translate "Total" %}</th>
                     </tr>
                     <tr>
                         {% for cat in categories %}
-                            <th class="border-start small text-muted">{% translate "New" %}</th>
-                            <th class="small text-muted">{% translate "Upd" %}</th>
-                            <th class="small text-muted">{% translate "Del" %}</th>
+                            {% for label in action_labels %}
+                                <th class="small text-muted{% if forloop.first %} border-start{% endif %}">{{ label }}</th>
+                            {% endfor %}
                         {% endfor %}
                     </tr>
                 </thead>
@@ -81,15 +80,11 @@
                                 <div class="small text-muted">{% for ch in r.characters %}{{ ch.name }} ({{ ch.total }}){% if not forloop.last %}, {% endif %}{% endfor %}</div>
                             {% endif %}
                         </td>
-                        <td class="border-start">{{ r.systems_created }}</td>
-                        <td>{{ r.systems_updated }}</td>
-                        <td>{{ r.systems_deleted }}</td>
-                        <td class="border-start">{{ r.connections_created }}</td>
-                        <td>{{ r.connections_updated }}</td>
-                        <td>{{ r.connections_deleted }}</td>
-                        <td class="border-start">{{ r.signatures_created }}</td>
-                        <td>{{ r.signatures_updated }}</td>
-                        <td>{{ r.signatures_deleted }}</td>
+                        {% for group in r.metric_groups %}
+                            {% for value in group %}
+                                <td{% if forloop.first %} class="border-start"{% endif %}>{{ value }}</td>
+                            {% endfor %}
+                        {% endfor %}
                         <td class="text-end fw-bold border-start">{{ r.total }}</td>
                     </tr>
                     {% endfor %}

@@ -15,11 +15,7 @@ from django.test import TestCase, override_settings
 from .. import app_settings
 from ..api import WandererApiError, audit_events, base_url_for
 from ..models import TrackedMap
-
-# the project settings point at Redis, which the suite doesn't require
-LOCMEM_CACHE = {
-    "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
-}
+from . import NO_REDIS_CACHE
 
 
 class FakeResponse:
@@ -44,24 +40,34 @@ class FakeResponse:
         return self._payload
 
 
-@override_settings(CACHES=LOCMEM_CACHE)
+@override_settings(CACHES=NO_REDIS_CACHE)
 class ApiTestCase(TestCase):
 
     def setUp(self):
         cache.clear()
         self.map = TrackedMap.objects.create(
-            name="Home", slug="home-map", api_token="secret-key"
+            name="Home",
+            slug="home-map",
+            base_url="https://wanderer.example.com",
+            api_token="secret-key",
         )
 
 
 class TestBaseUrl(ApiTestCase):
 
-    def test_should_use_the_configured_default(self):
-        self.assertEqual(base_url_for(self.map), app_settings.WANDERER_BASE_URL)
+    def test_should_use_the_maps_own_url(self):
+        self.assertEqual(base_url_for(self.map), "https://wanderer.example.com")
 
-    def test_should_prefer_the_per_map_override(self):
+    def test_should_strip_a_trailing_slash(self):
         self.map.base_url = "https://wanderer.example.com/"
         self.assertEqual(base_url_for(self.map), "https://wanderer.example.com")
+
+    def test_should_reject_a_map_without_a_base_url(self):
+        self.map.base_url = ""
+        with self.assertRaises(WandererApiError) as ctx:
+            audit_events(self.map)
+
+        self.assertIn("no base URL", str(ctx.exception))
 
 
 class TestAuditEvents(ApiTestCase):
@@ -159,6 +165,42 @@ class TestAuditEvents(ApiTestCase):
 
         self.assertEqual(mock_get.call_count, 2)
 
+    def test_should_not_reuse_a_response_fetched_with_a_different_key(self):
+        with patch("wanderer_leaderboard.api.requests.get") as mock_get:
+            mock_get.return_value = FakeResponse(payload={"data": [{"a": 1}]})
+            audit_events(self.map)
+
+            self.map.api_token = "rotated-key"
+            audit_events(self.map)
+
+        self.assertEqual(mock_get.call_count, 2)
+
+    def test_should_not_reuse_a_response_fetched_from_a_different_host(self):
+        with patch("wanderer_leaderboard.api.requests.get") as mock_get:
+            mock_get.return_value = FakeResponse(payload={"data": [{"a": 1}]})
+            audit_events(self.map)
+
+            self.map.base_url = "https://elsewhere.example.com"
+            audit_events(self.map)
+
+        self.assertEqual(mock_get.call_count, 2)
+
+
+class TestSettings(ApiTestCase):
+    """Settings are read when used, not when the module is first imported."""
+
+    @override_settings(WANDERER_LEADERBOARD_API_TIMEOUT=7)
+    def test_should_honour_a_timeout_changed_after_import(self):
+        with patch("wanderer_leaderboard.api.requests.get") as mock_get:
+            mock_get.return_value = FakeResponse()
+            audit_events(self.map)
+
+        self.assertEqual(mock_get.call_args.kwargs["timeout"], 7)
+
+    @override_settings(WANDERER_LEADERBOARD_CACHE_TTL=99)
+    def test_should_honour_a_ttl_changed_after_import(self):
+        self.assertEqual(app_settings.CACHE_TTL, 99)
+
 
 class TestErrorDetail(ApiTestCase):
     """The short message goes on the page, `detail` goes in the log."""
@@ -183,7 +225,7 @@ class TestErrorDetail(ApiTestCase):
 
         # everything needed to debug it, for the log
         self.assertIn("map='Home'", exc.detail)
-        self.assertIn("url=http://wanderer.example.com/api/map/audit", exc.detail)
+        self.assertIn("url=https://wanderer.example.com/api/map/audit", exc.detail)
         self.assertIn("slug=home-map", exc.detail)
         self.assertIn("period=3M", exc.detail)
         self.assertIn("status=500", exc.detail)
@@ -216,7 +258,7 @@ class TestErrorDetail(ApiTestCase):
                 audit_events(self.map, use_cache=False)
 
         self.assertIn(
-            "url=http://wanderer.example.com/api/map/audit", ctx.exception.detail
+            "url=https://wanderer.example.com/api/map/audit", ctx.exception.detail
         )
         self.assertIn("exception=ConnectionError", ctx.exception.detail)
         self.assertNotIn("status=", ctx.exception.detail)

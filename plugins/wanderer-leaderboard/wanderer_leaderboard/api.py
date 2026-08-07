@@ -8,6 +8,7 @@ simply not retrievable.
 """
 
 # Standard Library
+import hashlib
 import logging
 
 # Third Party
@@ -22,9 +23,9 @@ logger = logging.getLogger(__name__)
 
 AUDIT_PATH = "/api/map/audit"
 
-# widest window the API offers
-AUDIT_PERIOD = "3M"
+# widest window the API offers, in the relative form it insists on
 AUDIT_PERIOD_MONTHS = 3
+AUDIT_PERIOD = f"{AUDIT_PERIOD_MONTHS}M"
 
 # bump when the shape of a cached entry changes
 CACHE_VERSION = 1
@@ -49,7 +50,7 @@ class WandererApiError(Exception):
 
 
 def base_url_for(tracked_map):
-    return (tracked_map.base_url or app_settings.WANDERER_BASE_URL).rstrip("/")
+    return tracked_map.base_url.rstrip("/")
 
 
 def _map_params(tracked_map):
@@ -63,8 +64,23 @@ def _map_params(tracked_map):
     raise WandererApiError(f"{tracked_map.name}: no map id or slug configured")
 
 
+def credentials_fingerprint(tracked_map):
+    """Short hash of what a map's data was fetched with.
+
+    Anything cached for a map has to stop being served when its base URL or API
+    key changes, so both go in the key. Hashed because cache keys end up in
+    logs and Redis dumps.
+    """
+    return hashlib.sha256(
+        f"{base_url_for(tracked_map)}\x00{tracked_map.api_token}".encode()
+    ).hexdigest()[:16]
+
+
 def _cache_key(tracked_map, period):
-    return f"wanderer_leaderboard:audit:{CACHE_VERSION}:{tracked_map.pk}:{period}"
+    return (
+        f"wanderer_leaderboard:audit:{CACHE_VERSION}:{tracked_map.pk}:"
+        f"{period}:{credentials_fingerprint(tracked_map)}"
+    )
 
 
 def _body_excerpt(response):
@@ -141,6 +157,11 @@ def audit_events(tracked_map, period=AUDIT_PERIOD, use_cache=True):
     Each event carries event_name, event_data, inserted_at and an embedded
     character (eve_id, name, corporation_ticker, alliance_ticker).
     """
+    # both are required by the admin form, but a row can still reach here empty
+    # from a shell, a fixture or a data migration
+    if not tracked_map.base_url:
+        raise WandererApiError(f"{tracked_map.name}: no base URL configured")
+
     if not tracked_map.api_token:
         raise WandererApiError(f"{tracked_map.name}: no API key configured")
 

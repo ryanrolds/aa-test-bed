@@ -7,7 +7,8 @@ import json
 from unittest.mock import patch
 
 # Django
-from django.test import TestCase
+from django.core.cache import cache
+from django.test import TestCase, override_settings
 
 from ..api import WandererApiError
 from ..leaderboard import (
@@ -16,9 +17,11 @@ from ..leaderboard import (
     count_for,
     event_datetime,
     month_bounds,
+    month_label,
     monthly_leaderboard,
 )
 from ..models import TrackedMap
+from . import NO_REDIS_CACHE
 
 
 class TestClassify(TestCase):
@@ -91,6 +94,12 @@ class TestCountFor(TestCase):
         self.assertEqual(count_for("XHQ-7V"), 1)
         self.assertEqual(count_for("not json"), 1)
 
+    def test_should_count_one_for_a_payload_that_is_neither_string_nor_mapping(self):
+        # json.loads() raises TypeError on these, which is not the same thing as
+        # "this string was not JSON" — they must not reach the string parser
+        self.assertEqual(count_for(["a", "b"]), 1)
+        self.assertEqual(count_for(5), 1)
+
     def test_should_count_one_for_an_empty_payload(self):
         self.assertEqual(count_for("XHQ-7V:"), 1)
         self.assertEqual(count_for("XHQ-7V: , ,"), 1)
@@ -99,16 +108,21 @@ class TestCountFor(TestCase):
 class TestMonthBounds(TestCase):
 
     def test_should_bound_a_normal_month(self):
-        start, end, label = month_bounds(2026, 3)
+        start, end = month_bounds(2026, 3)
         self.assertEqual((start.year, start.month, start.day), (2026, 3, 1))
         self.assertEqual((end.year, end.month, end.day), (2026, 4, 1))
-        self.assertEqual(label, "March 2026")
 
     def test_should_roll_over_december(self):
-        start, end, label = month_bounds(2026, 12)
+        start, end = month_bounds(2026, 12)
         self.assertEqual((start.year, start.month), (2026, 12))
         self.assertEqual((end.year, end.month, end.day), (2027, 1, 1))
-        self.assertEqual(label, "December 2026")
+
+
+class TestMonthLabel(TestCase):
+
+    def test_should_name_the_month(self):
+        self.assertEqual(month_label(2026, 3), "March 2026")
+        self.assertEqual(month_label(2026, 12), "December 2026")
 
 
 class TestMetricKeys(TestCase):
@@ -154,21 +168,26 @@ def _event(name, when, eve_id="1001", data=None, name_of="Pilot One", corp="ABC"
     }
 
 
+@override_settings(CACHES=NO_REDIS_CACHE)
 class TestMonthlyLeaderboard(TestCase):
 
     def setUp(self):
+        cache.clear()
         self.map = TrackedMap.objects.create(
-            name="Home", slug="home-map", api_token="secret-key"
+            name="Home",
+            slug="home-map",
+            base_url="https://wanderer.example.com",
+            api_token="secret-key",
         )
 
     def _run(self, events, year=2026, month=3):
         with patch("wanderer_leaderboard.leaderboard.api.audit_events") as mock:
             mock.return_value = events
 
-            return monthly_leaderboard([self.map], year, month)
+            return monthly_leaderboard(self.map, year, month)
 
     def test_should_count_and_rank_characters(self):
-        rows, errors = self._run(
+        rows = self._run(
             [
                 _event("system_added", "2026-03-05T12:00:00Z"),
                 _event("system_added", "2026-03-06T12:00:00Z"),
@@ -187,24 +206,36 @@ class TestMonthlyLeaderboard(TestCase):
             ]
         )
 
-        self.assertEqual(errors, [])
         self.assertEqual(len(rows), 2)
 
         first, second = rows
-        self.assertEqual(first["rank"], 1)
-        self.assertEqual(first["character_name"], "Pilot One")
-        self.assertEqual(first["corporation_ticker"], "ABC")
-        self.assertEqual(first["systems_created"], 2)
-        self.assertEqual(first["signatures_created"], 3)
-        self.assertEqual(first["total"], 5)
-        self.assertFalse(first["is_linked"])
+        self.assertEqual(first.rank, 1)
+        self.assertEqual(first.character_name, "Pilot One")
+        self.assertEqual(first.corporation_ticker, "ABC")
+        self.assertEqual(first.metrics["systems_created"], 2)
+        self.assertEqual(first.metrics["signatures_created"], 3)
+        self.assertEqual(first.total, 5)
+        self.assertFalse(first.is_linked)
 
-        self.assertEqual(second["character_name"], "Pilot Two")
-        self.assertEqual(second["connections_deleted"], 1)
-        self.assertEqual(second["total"], 1)
+        self.assertEqual(second.character_name, "Pilot Two")
+        self.assertEqual(second.metrics["connections_deleted"], 1)
+        self.assertEqual(second.total, 1)
+
+    def test_should_lay_metrics_out_in_category_order(self):
+        rows = self._run(
+            [
+                _event("system_added", "2026-03-05T12:00:00Z"),
+                _event("signatures_removed", "2026-03-06T12:00:00Z"),
+            ]
+        )
+
+        # systems / connections / signatures, each created / updated / deleted
+        self.assertEqual(
+            rows[0].metric_groups, [[1, 0, 0], [0, 0, 0], [0, 0, 1]]
+        )
 
     def test_should_drop_events_outside_the_month(self):
-        rows, _ = self._run(
+        rows = self._run(
             [
                 _event("system_added", "2026-02-28T23:59:59Z"),
                 _event("system_added", "2026-03-01T00:00:00Z"),
@@ -213,10 +244,10 @@ class TestMonthlyLeaderboard(TestCase):
         )
 
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["systems_created"], 1)
+        self.assertEqual(rows[0].metrics["systems_created"], 1)
 
     def test_should_ignore_unclassifiable_and_anonymous_events(self):
-        rows, _ = self._run(
+        rows = self._run(
             [
                 _event("map_acl_added", "2026-03-05T12:00:00Z"),
                 _event("character_added", "2026-03-05T12:00:00Z"),
@@ -231,10 +262,86 @@ class TestMonthlyLeaderboard(TestCase):
 
         self.assertEqual(rows, [])
 
-    def test_should_report_fetch_failures_without_failing(self):
+    def test_should_raise_when_the_map_cannot_be_read(self):
         with patch("wanderer_leaderboard.leaderboard.api.audit_events") as mock:
             mock.side_effect = WandererApiError("Home: API key rejected by Wanderer")
-            rows, errors = monthly_leaderboard([self.map], 2026, 3)
 
-        self.assertEqual(rows, [])
-        self.assertEqual(errors, ["Home: API key rejected by Wanderer"])
+            with self.assertRaises(WandererApiError):
+                monthly_leaderboard(self.map, 2026, 3)
+
+    def test_should_not_cache_a_failed_fetch(self):
+        with patch("wanderer_leaderboard.leaderboard.api.audit_events") as mock:
+            mock.side_effect = WandererApiError("Home: API key rejected by Wanderer")
+
+            with self.assertRaises(WandererApiError):
+                monthly_leaderboard(self.map, 2026, 3)
+
+            mock.side_effect = None
+            mock.return_value = [_event("system_added", "2026-03-05T12:00:00Z")]
+            rows = monthly_leaderboard(self.map, 2026, 3)
+
+        self.assertEqual(len(rows), 1)
+
+    def test_should_break_total_ties_by_name(self):
+        rows = self._run(
+            [
+                _event(
+                    "system_added",
+                    "2026-03-05T12:00:00Z",
+                    eve_id="1001",
+                    name_of="Zeta Pilot",
+                ),
+                _event(
+                    "system_added",
+                    "2026-03-05T12:00:01Z",
+                    eve_id="1002",
+                    name_of="Alpha Pilot",
+                ),
+            ]
+        )
+
+        self.assertEqual(
+            [row.character_name for row in rows], ["Alpha Pilot", "Zeta Pilot"]
+        )
+
+    def test_should_serve_a_second_view_of_the_month_from_cache(self):
+        events = [_event("system_added", "2026-03-05T12:00:00Z")]
+
+        with patch("wanderer_leaderboard.leaderboard.api.audit_events") as mock:
+            mock.return_value = events
+            first = monthly_leaderboard(self.map, 2026, 3)
+            second = monthly_leaderboard(self.map, 2026, 3)
+
+        self.assertEqual(mock.call_count, 1)
+        self.assertEqual(first[0].character_name, second[0].character_name)
+        self.assertEqual(second[0].total, 1)
+
+    def test_should_cache_each_month_separately(self):
+        with patch("wanderer_leaderboard.leaderboard.api.audit_events") as mock:
+            mock.return_value = [
+                _event("system_added", "2026-03-05T12:00:00Z"),
+                _event("system_added", "2026-04-05T12:00:00Z"),
+            ]
+            march = monthly_leaderboard(self.map, 2026, 3)
+            april = monthly_leaderboard(self.map, 2026, 4)
+
+        self.assertEqual(march[0].metrics["systems_created"], 1)
+        self.assertEqual(april[0].metrics["systems_created"], 1)
+
+    def test_should_not_serve_rows_computed_with_a_different_key(self):
+        with patch("wanderer_leaderboard.leaderboard.api.audit_events") as mock:
+            mock.return_value = [_event("system_added", "2026-03-05T12:00:00Z")]
+            monthly_leaderboard(self.map, 2026, 3)
+
+            self.map.api_token = "rotated-key"
+            monthly_leaderboard(self.map, 2026, 3)
+
+        self.assertEqual(mock.call_count, 2)
+
+    def test_should_bypass_the_cache_when_asked(self):
+        with patch("wanderer_leaderboard.leaderboard.api.audit_events") as mock:
+            mock.return_value = [_event("system_added", "2026-03-05T12:00:00Z")]
+            monthly_leaderboard(self.map, 2026, 3)
+            monthly_leaderboard(self.map, 2026, 3, use_cache=False)
+
+        self.assertEqual(mock.call_count, 2)

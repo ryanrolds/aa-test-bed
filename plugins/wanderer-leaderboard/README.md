@@ -1,83 +1,74 @@
 # aa-wanderer-leaderboard
 
-Who actually mapped anything this month? Now you can find out.
+Monthly mapping contribution leaderboard for a
+[Wanderer](https://github.com/wanderer-industries/wanderer) map, as an
+Alliance Auth app.
 
-## What does it do?
+Wanderer already totals mapping contributions — but it totals them per
+character, and it has no way of knowing that six characters are one person.
+Alliance Auth does: it is the authoritative record of mains and alts. This app
+reads Wanderer's audit API and rolls the numbers up per main, so a scanning
+reward program pays out from one table instead of being reconciled by hand.
 
-Builds a monthly contribution leaderboard for a
-[Wanderer](https://github.com/wanderer-industries/wanderer) map, so you can pay your
-best mappers what they are owed. Wanderer records all the activity but never totals
-it up, so this reads its audit API and does the counting.
+## Features
 
-Contributions get broken out nine ways: systems, connections and signatures, each
-split into created, updated and deleted.
+- Contributions credited to the person, not the character — alts roll up to
+  their Alliance Auth main, with each character listed under the row
+- Characters Alliance Auth does not know get their own row, marked unlinked
+- Systems, connections and signatures, each split into created, updated and
+  deleted, plus a total
+- One month at a time, ranked, with the previous and next month a click away
+- Track several maps and pick between them on the page
 
-| Column | Wanderer event_name | Counted as |
-|---|---|---|
-| Systems created / updated / deleted | `system_added` / `system_updated` / `systems_removed` | events, deletes count `solar_system_ids[]` |
-| Connections created / updated / deleted | `map_connection_added` / `..._updated` / `..._removed` | events |
-| Signatures created / updated / deleted | `signatures_added` / `..._updated` / `..._removed` | length of `signatures[]` |
-| Total | all nine added up | |
+## For server admins
 
-Event types are matched by category and action instead of by exact name, so new
-variants get picked up on their own. ACL and admin events are ignored. Where one
-event covers several items, a batch of signatures or a multi system delete, the count
-comes from the array length in `event_data`.
+Nothing runs in the background and nothing is stored. Opening the page makes at
+most one call to Wanderer for the selected map, and both that response and the
+finished table are cached for five minutes
+(`WANDERER_LEADERBOARD_CACHE_TTL`). Paging between months inside that window
+costs no further calls, and the cache is shared, so a hundred people watching
+the leaderboard cost the same as one. Editing a map's URL or API key discards
+what the old ones fetched.
 
-Alts are rolled up to their Alliance Auth main, so each person gets one row and one
-payout, with their contributing characters listed underneath. Characters that are not
-registered in Auth cannot be linked, so those get their own row marked unlinked.
-
-Everything is worked out on page load straight from the audit API. No collection
-task, no snapshots, and no stored copy to drift out of date. Calendar months come
-from each event's `inserted_at`.
-
-### Why the audit endpoint and not character-activity
-
-Wanderer's `character-activity` endpoint only gives you coarse connections,
-signatures and passages totals. It leaves out systems completely and does not split
-created from updated from deleted. `GET /api/map/audit` hands back the raw events
-instead — `event_name`, `event_data` and the acting character — which is everything
-the nine columns need.
-
-The catch is that audit only accepts a relative period, `1H` through `3M`, with no
-way to ask for a specific month. So the plugin pulls `3M` and slices the selected
-month out itself. Months further back than that are gone as far as the API is
-concerned, and the page says so rather than showing a misleading zero.
-
-## Todo
-
-- Per corp and per alliance filtering
-- Configurable weighting per metric for payout math
-- Persist pulled events so history outlives the API's three month window
+Wanderer only serves a rolling three month window, so older months cannot be
+shown; the page says so rather than displaying a misleading zero.
 
 ## Installation
 
-`pip install -U aa-wanderer-leaderboard`
-
-Add `'wanderer_leaderboard'` to `INSTALLED_APPS`, then `python manage.py migrate`.
-
-Optionally, in `local.py`:
-
-```python
-# fallback for tracked maps that don't set their own base URL
-WANDERER_LEADERBOARD_BASE_URL = "https://wanderer.example.com"
-WANDERER_LEADERBOARD_API_TIMEOUT = 30   # seconds
-WANDERER_LEADERBOARD_CACHE_TTL = 300    # seconds an audit response is reused
+```bash
+pip install -U aa-wanderer-leaderboard
 ```
 
-No database link to Wanderer is required.
+Add `wanderer_leaderboard` to `INSTALLED_APPS`, then:
 
-## Usage
+```bash
+python manage.py migrate
+```
 
-Copy a map's **API key** out of Wanderer, then in the admin panel add a tracked map
-with its slug or map id and paste the key in. The **Test the API key against
-Wanderer** admin action tells you straight away whether it works. Then grant users
-`wanderer_leaderboard | general | Can access the Wanderer Leaderboard` and the
-Wanderer Leaderboard menu entry shows up for them.
+Optional settings in `local.py`:
 
-Pick a map and a month on the page itself. Data is live, so there is nothing to
-collect first.
+```python
+WANDERER_LEADERBOARD_API_TIMEOUT = 30   # seconds
+WANDERER_LEADERBOARD_CACHE_TTL = 300    # seconds a response is reused
+```
+
+Everything else is per map and lives in the admin. No database link to Wanderer
+is required.
+
+## Setup
+
+1. Copy a map's **API key** from Wanderer's map settings.
+2. In the Django admin, add a tracked map: its slug or map ID, the base URL of
+   the Wanderer instance, and the API key. The **Test the API key against
+   Wanderer** action confirms it works.
+3. Grant users `wanderer_leaderboard | general | Can access the Wanderer
+   Leaderboard`. The menu entry appears for them.
+
+The base URL is called from the Alliance Auth server, not from your browser, so
+it has to be reachable from there — behind Docker that is usually the Wanderer
+service name rather than the localhost address you use in the browser.
+
+Pick a map and a month on the page. One map is shown at a time.
 
 ## Tests
 
@@ -85,8 +76,8 @@ collect first.
 DJANGO_SETTINGS_MODULE=testauth.settings.local python runtests.py wanderer_leaderboard
 ```
 
-Needs `allianceauth` and a reachable Redis; point elsewhere with
-`TESTAUTH_REDIS_URL=redis://aa_redis:6379/15` to run inside the compose stack.
+Needs `allianceauth` and a reachable Redis; override with
+`TESTAUTH_REDIS_URL=redis://aa_redis:6379/15`.
 
 ## Credits
 

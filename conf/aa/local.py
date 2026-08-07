@@ -55,10 +55,8 @@ INSTALLED_APPS += [  # noqa: F405
     "wanderer_leaderboard",
 ]
 
-# The leaderboard reads Wanderer's audit API over HTTP, authenticated per map
-# with an API key stored on the TrackedMap record (AA admin). This is only the
-# fallback base URL for maps that don't set their own; inside compose the
-# Wanderer service is reachable by name over the shared wanderer-egress bridge.
-WANDERER_LEADERBOARD_BASE_URL = os.environ.get(
-    "WANDERER_BASE_URL", "http://wanderer:8000"
-)
+# The leaderboard reads Wanderer's audit API over HTTP. Both the base URL and
+# the API key live on the TrackedMap record in the AA admin, so there is nothing
+# to configure here. Inside compose, use http://wanderer:8000 as a map's base
+# URL — the Wanderer service is reachable by name over the shared
+# wanderer-egress bridge, and http://localhost:8000 is Alliance Auth itself.

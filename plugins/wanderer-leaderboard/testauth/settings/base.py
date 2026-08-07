@@ -218,9 +218,9 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/1.10/howto/static-files/
 STATIC_URL = "/static/"
-STATICFILES_DIRS = [
-    os.path.join(PROJECT_DIR, "static"),
-]
+# This project ships no static files of its own; pointing at a directory that
+# does not exist only earns a staticfiles.W004 warning on every run.
+STATICFILES_DIRS = []
 STATIC_ROOT = os.path.join(BASE_DIR, "static")
 
 # Bootstrap messaging css workaround

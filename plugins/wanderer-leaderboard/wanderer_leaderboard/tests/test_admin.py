@@ -16,7 +16,7 @@ def form_data(**overrides):
         "name": "Home",
         "identifier_type": "slug",
         "identifier": "home-map",
-        "base_url": "",
+        "base_url": "https://wanderer.example.com",
         "api_token": "secret-key",
         "is_active": "on",
     }
@@ -58,7 +58,9 @@ class TestIdentifierChoice(TestCase):
         self.assertEqual(form.save().slug, "home-map")
 
     def test_should_clear_the_other_column_when_switching(self):
-        tracked_map = TrackedMap.objects.create(name="Home", map_id=MAP_UUID)
+        tracked_map = TrackedMap.objects.create(
+            name="Home", map_id=MAP_UUID, base_url="https://wanderer.example.com"
+        )
 
         form = TrackedMapForm(
             instance=tracked_map, data=form_data(identifier="now-a-slug")
@@ -75,14 +77,18 @@ class TestIdentifierPreselection(TestCase):
     """Editing shows the identifier the map actually uses."""
 
     def test_should_preselect_slug(self):
-        tracked_map = TrackedMap.objects.create(name="Home", slug="home-map")
+        tracked_map = TrackedMap.objects.create(
+            name="Home", slug="home-map", base_url="https://wanderer.example.com"
+        )
         form = TrackedMapForm(instance=tracked_map)
 
         self.assertEqual(form.fields["identifier_type"].initial, "slug")
         self.assertEqual(form.fields["identifier"].initial, "home-map")
 
     def test_should_preselect_map_id(self):
-        tracked_map = TrackedMap.objects.create(name="Home", map_id=MAP_UUID)
+        tracked_map = TrackedMap.objects.create(
+            name="Home", map_id=MAP_UUID, base_url="https://wanderer.example.com"
+        )
         form = TrackedMapForm(instance=tracked_map)
 
         self.assertEqual(form.fields["identifier_type"].initial, "map_id")
