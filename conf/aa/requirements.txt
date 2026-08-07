@@ -1,10 +1,8 @@
-# Extra published packages to install into the Alliance Auth image.
-# The local ./plugins/wanderer plugin is installed separately (editable) by the
-# Dockerfile, so it does NOT belong here. Add third-party AA apps or plugin
-# dependencies below, one per line, pinned where possible. Rebuild with:
-#   docker compose build allianceauth_gunicorn
+# Published packages to install into the Alliance Auth image, one per line,
+# pinned so a rebuild is reproducible. Rebuild after editing:
+#   docker compose up -d --build
 #
-# example-aa-plugin==1.2.3
+# Bump the pin below to test a newer plugin release; the plugin source itself
+# lives in its own repo (https://github.com/ryanrolds/aa-wanderer-leaderboard).
 
-# aa-wanderer-leaderboard talks to Wanderer over HTTP now; `requests` already
-# ships with Alliance Auth, so nothing extra is needed here.
+aa-wanderer-leaderboard==0.1.0

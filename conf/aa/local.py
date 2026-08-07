@@ -50,7 +50,7 @@ CACHES = {
     }
 }
 
-# Test-bed plugins developed in this repo (installed editable in the image).
+# Plugins under test (installed from PyPI — see conf/aa/requirements.txt).
 INSTALLED_APPS += [  # noqa: F405
     "wanderer_leaderboard",
 ]

@@ -4,9 +4,11 @@ An **Alliance Auth test bed** for developing Alliance Auth plugins, running
 alongside a live [Wanderer](https://github.com/wanderer-industries/wanderer)
 instance so integration plugins can be built and exercised end to end.
 
-The first plugin under development is
-[`aa-wanderer-leaderboard`](plugins/wanderer-leaderboard) — an Alliance Auth
-leaderboard for Wanderer.
+The first plugin exercised here is
+[`aa-wanderer-leaderboard`](https://github.com/ryanrolds/aa-wanderer-leaderboard)
+— an Alliance Auth leaderboard for Wanderer. It is installed from
+[PyPI](https://pypi.org/project/aa-wanderer-leaderboard/); its source lives in
+its own repo.
 
 Everything runs from a single Docker Compose project.
 
@@ -68,7 +70,8 @@ docker compose up -d --build
 ```
 
 The AA app image is built on top of the published AA image and installs the
-local `plugins/wanderer-leaderboard` package in editable mode.
+plugins pinned in [`conf/aa/requirements.txt`](conf/aa/requirements.txt) from
+PyPI.
 
 Migrations and static files are handled automatically: the one-shot
 `allianceauth_init` service waits for `aa_mysql` to report healthy, applies AA
@@ -116,25 +119,26 @@ Then open **http://localhost:8001/wanderer-leaderboard/**.
 > than that can't be retrieved and render an explanatory notice. Responses are
 > cached for `WANDERER_LEADERBOARD_CACHE_TTL` seconds (default 300).
 
-## Plugin development workflow
+## Plugin workflow
 
-The plugin lives in [`plugins/wanderer-leaderboard/`](plugins/wanderer-leaderboard)
-and is bind-mounted into the AA containers, so the loop is fast:
+Plugins are installed from PyPI, pinned in
+[`conf/aa/requirements.txt`](conf/aa/requirements.txt). The source for
+`aa-wanderer-leaderboard` lives in
+[its own repo](https://github.com/ryanrolds/aa-wanderer-leaderboard).
 
-- **Edit Python / templates** → restart the app to pick up changes:
+- **Test a new plugin release** → bump the pin and rebuild. Any new migrations
+  are applied by `allianceauth_init` on the way up:
   ```bash
-  docker compose restart allianceauth_gunicorn allianceauth_worker allianceauth_worker_services allianceauth_beat
+  docker compose up -d --build
   ```
-- **Add/rename models** → make and apply migrations. The container runs as a
-  different uid than your host user, so `makemigrations` **cannot write** the
-  file into the bind-mounted source (it fails with `PermissionError`). Generate
-  it, then fix ownership — or hand-write the migration:
-  ```bash
-  docker compose exec allianceauth_gunicorn python manage.py makemigrations wanderer_leaderboard
-  sudo chown -R "$(id -u):$(id -g)" plugins/wanderer-leaderboard   # if it did write as root/other
-  docker compose exec allianceauth_gunicorn python manage.py migrate
+- **Test unreleased plugin code** → point the requirement at a git ref instead
+  of a version, then rebuild as above:
   ```
-- **Add a third-party dependency** → add it to
+  aa-wanderer-leaderboard @ git+https://github.com/ryanrolds/aa-wanderer-leaderboard@main
+  ```
+  (`--build` alone may reuse the cached layer for an unchanged URL; use
+  `docker compose build --no-cache allianceauth_gunicorn` to force a re-pull.)
+- **Add another plugin or dependency** → add it to
   [`conf/aa/requirements.txt`](conf/aa/requirements.txt) and rebuild:
   ```bash
   docker compose up -d --build
@@ -157,12 +161,11 @@ docker-compose.yml        Wanderer + Alliance Auth services (merged)
 .env                      secrets + config (git-ignored)
 wanderer-conf.env         Wanderer app config (git-ignored)
 conf/aa/
-  Dockerfile              builds the plugin-dev AA image
+  Dockerfile              builds the AA image (installs the pinned plugins)
   local.py                AA settings override (DB, redis, ESI, plugins)
   celery.py               AA celery app
   nginx.conf              static files + reverse proxy for AA
-  requirements.txt        extra pip packages for the AA image
-plugins/wanderer-leaderboard/   the aa-wanderer-leaderboard plugin (editable install)
+  requirements.txt        pinned plugins/pip packages for the AA image
 ```
 
 ## Useful commands

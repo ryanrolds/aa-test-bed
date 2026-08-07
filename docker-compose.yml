@@ -3,9 +3,8 @@
 #   - alliance auth    : plugin development target (web UI on :8001) -> added
 #
 # The AA app services build a thin image on top of the published Alliance Auth
-# image so the local plugin under ./plugins can be pip-installed editable. The
-# plugin source is bind-mounted, so code edits take effect on a container restart
-# (no rebuild needed unless you change dependencies).
+# image that pip-installs the plugins listed in conf/aa/requirements.txt from
+# PyPI. Changing a pin there means rebuilding: `docker compose up -d --build`.
 
 # Shared config for every Alliance Auth Django/Celery process.
 x-allianceauth-base: &allianceauth-base
@@ -25,8 +24,6 @@ x-allianceauth-base: &allianceauth-base
     - ./conf/aa/local.py:/home/allianceauth/myauth/myauth/settings/local.py:ro
     - ./conf/aa/celery.py:/home/allianceauth/myauth/myauth/celery.py:ro
     - aa-static:/var/www/myauth/static
-    # Live-editable plugin source (installed editable in the image).
-    - ./plugins/wanderer-leaderboard:/aa-plugins/wanderer-leaderboard
   depends_on:
     aa_mysql:
       condition: service_healthy
@@ -155,8 +152,8 @@ services:
       timeout: 5s
       retries: 10
 
-  # One-shot: applies Django migrations (AA core + the local plugin, including
-  # the plugin's own tables), collects static files into the aa-static volume
+  # One-shot: applies Django migrations (AA core + the installed plugins,
+  # including their own tables), collects static files into the aa-static volume
   # that aa_nginx serves, then exits. Every other AA service waits for it to
   # finish successfully, so a fresh `docker compose up` needs no manual step.
   # Both steps are idempotent — a no-op once the schema and static are current.
