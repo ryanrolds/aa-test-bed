@@ -217,6 +217,3 @@ docker compose down -v                         # stop and DELETE all data
 
 GPL-2.0-only, matching [Alliance Auth](https://gitlab.com/allianceauth/allianceauth).
 See [LICENSE](LICENSE). Copyright © 2026 Ryan R. Olds.
-
-The `aa-wanderer-leaderboard` plugin is a separate project with its own license
-(AGPL-3.0-or-later) — see [its repo](https://github.com/ryanrolds/aa-wanderer-leaderboard).
