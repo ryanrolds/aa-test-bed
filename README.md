@@ -28,29 +28,48 @@ Alliance Auth version is pinned via `AA_DOCKER_TAG` in `.env` (currently `v5.2.0
 ## Prerequisites
 
 - Docker + Docker Compose v2
-- Two EVE SSO applications (one already exists for Wanderer) from
-  <https://developers.eveonline.com> — see below.
+- **Two** EVE SSO applications from <https://developers.eveonline.com> — one for
+  Wanderer and one for Alliance Auth. They need different callback URLs, so one
+  app cannot serve both. Created in steps 2 and 3 below.
 
 ## First-time setup
 
 ### 1. Configuration & secrets
 
-`.env` (compose interpolation + AA runtime config) and `wanderer-conf.env`
-(Wanderer app config) are git-ignored and already contain generated secrets for
-local use. If you're starting from a clean checkout, copy the example and
-generate fresh values:
+Both config files are git-ignored, so a fresh clone has neither. Copy the
+examples and generate secrets into them:
 
 ```bash
-cp .env.example .env
+cp .env.example .env                          # compose interpolation + AA runtime config
+cp wanderer-conf.env.example wanderer-conf.env # Wanderer app config
 # then generate and paste in:
-openssl rand -base64 48   # AA_SECRET_KEY
+openssl rand -base64 48   # AA_SECRET_KEY, SECRET_KEY_BASE
+openssl rand -base64 32   # CLOAK_KEY
 openssl rand -hex 16      # AA_DB_PASSWORD, AA_DB_ROOT_PASSWORD, POSTGRES_PASSWORD
 ```
 
-### 2. EVE SSO application for Alliance Auth
+Compose fails immediately if either file is missing — `wanderer-conf.env` is
+read by the `wanderer` service, so even `docker compose ps` errors without it.
 
-Create a **new** application at <https://developers.eveonline.com> (separate from
-the Wanderer app):
+> `CLOAK_KEY` encrypts Wanderer's stored character tokens. Changing it later
+> orphans existing data, so set it once and leave it.
+
+### 2. EVE SSO application for Wanderer
+
+Create an application at <https://developers.eveonline.com>:
+
+- **Callback URL:** `http://localhost:8000/auth/eve/callback` (must match `WEB_APP_URL`)
+- **Scopes:** `esi-location.read_location.v1`, `esi-location.read_ship_type.v1`,
+  `esi-location.read_online.v1`, `esi-search.search_structures.v1`,
+  `esi-ui.write_waypoint.v1`
+
+Put the client ID/secret into `wanderer-conf.env` as `EVE_CLIENT_ID` /
+`EVE_CLIENT_SECRET`, and set `WANDERER_ADMIN_PASSWORD` while you're there — it
+is the basic-auth password for Wanderer's `/admin`, which is otherwise open.
+
+### 3. EVE SSO application for Alliance Auth
+
+Create a **second** application (separate from the Wanderer app):
 
 - **Callback URL:** `http://localhost:8001/sso/callback` (must match `AA_SITE_URL` exactly)
 - **Scopes:** `publicData` to start (AA requests more per service as needed)
@@ -63,7 +82,7 @@ ESI_SSO_CLIENT_SECRET=...
 ESI_USER_CONTACT_EMAIL=you@example.com
 ```
 
-### 3. Start everything
+### 4. Start everything
 
 ```bash
 docker compose up -d --build
@@ -80,7 +99,7 @@ core + plugin migrations, runs `collectstatic` into the `aa-static` volume that
 Both steps are idempotent, so it runs on every `up` and is a no-op when the
 schema and static files are current.
 
-### 4. Create an admin user (first run only)
+### 5. Create an admin user (first run only)
 
 ```bash
 docker compose exec -it allianceauth_gunicorn python manage.py createsuperuser
@@ -99,7 +118,16 @@ Admin portals:
 > `wanderer_leaderboard | general | Can access the Wanderer Leaderboard`. The
 > **Wanderer Leaderboard** menu item appears once granted.
 
-### 5. Wanderer Leaderboard: map API key
+### 6. Create a Wanderer map
+
+The leaderboard needs a map to read. In Wanderer (http://localhost:8000), sign
+in with your EVE character and create one. `WANDERER_RESTRICT_MAPS_CREATION=true`
+in `wanderer-conf.env` means only admins may create maps — mark your character
+an admin at http://localhost:8000/admin (basic-auth with
+`WANDERER_ADMIN_USERNAME` / `WANDERER_ADMIN_PASSWORD`), or set that toggle to
+`false`.
+
+### 7. Wanderer Leaderboard: map API key
 
 The leaderboard reads Wanderer's audit API (`GET /api/map/audit`), authenticated
 per map with that map's own API key — no database access, no Postgres role.
@@ -116,8 +144,15 @@ Then open **http://localhost:8001/wanderer-leaderboard/**.
 
 > The audit API only serves *relative* windows (max `3M`), so the leaderboard
 > pulls three months and slices the selected month out locally. Months older
-> than that can't be retrieved and render an explanatory notice. Responses are
-> cached for `WANDERER_LEADERBOARD_CACHE_TTL` seconds (default 300).
+> than that can't be retrieved and render an explanatory notice.
+
+The plugin reads two optional settings, both settable in
+[`conf/aa/local.py`](conf/aa/local.py):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `WANDERER_LEADERBOARD_CACHE_TTL` | `300` | Seconds an audit response / rendered leaderboard stays cached |
+| `WANDERER_LEADERBOARD_API_TIMEOUT` | `30` | Seconds to wait on the map API before giving up |
 
 ## Plugin workflow
 
@@ -158,8 +193,8 @@ Plugins are installed from PyPI, pinned in
 
 ```
 docker-compose.yml        Wanderer + Alliance Auth services (merged)
-.env                      secrets + config (git-ignored)
-wanderer-conf.env         Wanderer app config (git-ignored)
+.env                      secrets + config (git-ignored; see .env.example)
+wanderer-conf.env         Wanderer app config (git-ignored; see wanderer-conf.env.example)
 conf/aa/
   Dockerfile              builds the AA image (installs the pinned plugins)
   local.py                AA settings override (DB, redis, ESI, plugins)
@@ -177,3 +212,11 @@ docker compose exec allianceauth_gunicorn bash # shell in the AA container
 docker compose down                            # stop (keeps volumes/data)
 docker compose down -v                         # stop and DELETE all data
 ```
+
+## License
+
+GPL-2.0-only, matching [Alliance Auth](https://gitlab.com/allianceauth/allianceauth).
+See [LICENSE](LICENSE). Copyright © 2026 Ryan R. Olds.
+
+The `aa-wanderer-leaderboard` plugin is a separate project with its own license
+(AGPL-3.0-or-later) — see [its repo](https://github.com/ryanrolds/aa-wanderer-leaderboard).

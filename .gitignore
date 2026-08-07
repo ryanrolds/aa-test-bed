@@ -2,9 +2,6 @@
 .env
 wanderer-conf.env
 
-# Python build/editable-install artifacts from plugin development
-*.egg-info/
+# Python artifacts, in case anything is run against a checkout here
 __pycache__/
 *.py[cod]
-build/
-dist/
